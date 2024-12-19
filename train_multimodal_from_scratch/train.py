@@ -205,7 +205,7 @@ if __name__ == '__main__':
     
     # get mllm
     config = VLMConfig(llm_model_name='Qwen/Qwen2.5-0.5B-Instruct', vision_model_name='google/siglip-base-patch16-224', image_pad_num=49)
-    model = VLM(config).cuda()
+    model = VLM(config)
     print(model)
     print(f'模型参数量为：{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
     
@@ -251,5 +251,3 @@ if __name__ == '__main__':
     # save model
     trainer.save_model(output_dir=output_dir)
     trainer.save_state()
-
-    
