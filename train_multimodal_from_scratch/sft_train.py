@@ -21,18 +21,21 @@ from train import VLMConfig, VLM
 
 def find_assistant_tokens(tokenizer, target):
     result = []
-    start_index =0
+    start_index = 0
     end_index = 0
+
     while start_index <= len(target)-1:
-        if target[start_index]!=tokenizer('assistant')['input_ids'][0]:
-            start_index+=1
-            end_index+=1
+        if target[start_index] != tokenizer('assistant')['input_ids'][0]:
+            start_index += 1
+            end_index += 1
         else:
-            end_index+=1
-            if target[end_index]==tokenizer('<|im_end|>')['input_ids'][0]:
-                result.append((start_index+1,end_index+1))
-                start_index=end_index+1
+            end_index += 1
+            if target[end_index] == tokenizer('<|im_end|>')['input_ids'][0]:
+                result.append((start_index + 1, end_index + 1))
+                start_index = end_index + 1
+
     return result
+
 
 class SFTDataset(Dataset):
     def __init__(self, images_path, data_path, tokenizer, processor, config):
@@ -54,15 +57,14 @@ class SFTDataset(Dataset):
         try:
             image_name = 'COCO_train2014_' + str(sample['image'])
             conversations = sample['conversations']
-            messages = [{"role":"system", "content":'You are a helpful assistant.'}]
+            messages = [{"role": "system", "content": 'You are a helpful assistant.'}]
             for conversation in conversations:
                 if conversation['from'] == 'human':
-                    messages.append({"role":"user", "content":conversation['value']})
+                    messages.append({"role": "user", "content": conversation['value']})
                 else:
-                    messages.append({"role":"assistant", "content":conversation['value']})
-            text = tokenizer.apply_chat_template(messages, \
-                tokenize=False, \
-                ).replace('<image>', '<|image_pad|>'*self.config.image_pad_num)
+                    messages.append({"role": "assistant", "content": conversation['value']})
+            text = tokenizer.apply_chat_template(messages, tokenize=False) \
+            .replace('<image>', '<|image_pad|>' * self.config.image_pad_num)
             # print(text)
             input_ids = tokenizer(text)['input_ids']
             indexs = find_assistant_tokens(tokenizer, input_ids)
@@ -71,16 +73,13 @@ class SFTDataset(Dataset):
                 labels[index[0]:index[1]] = input_ids[index[0]:index[1]]
             input_ids = input_ids[:-1]
             labels = labels[1:]
-        
-            
             image = Image.open(os.path.join(self.images_path, image_name)).convert('RGB')
-            
             pixel_values = self.processor(text=None, images=image)['pixel_values']
+        
         except:
-            
             default_image = Image.new('RGB', (224, 224), color='white')
             pixel_values = self.processor(text=None, images=default_image)['pixel_values']
-            q_text = self.tokenizer.apply_chat_template([{"role":"system", "content":'You are a helpful assistant.'}, {"role":"user", "content":"图片内容是什么\n<image>"}], \
+            q_text = self.tokenizer.apply_chat_template([{"role": "system", "content": 'You are a helpful assistant.'}, {"role": "user", "content": "图片内容是什么\n<image>"}], \
                 tokenize=False, \
                 add_generation_prompt=True).replace('<image>', '<|image_pad|>'*self.config.image_pad_num)
             a_text = '图片内容为空' + self.tokenizer.eos_token
@@ -118,21 +117,22 @@ class MyDataCollator:
 
 if __name__ == '__main__':
     config = VLMConfig()
-    processor = AutoProcessor.from_pretrained("/home/user/wyf/siglip-base-patch16-224")
-    tokenizer = AutoTokenizer.from_pretrained('/home/user/Downloads/Qwen2.5-0.5B-Instruct')
+    processor = AutoProcessor.from_pretrained("/data/vdc/tangzichen/siglip-base-patch16-224")
+    tokenizer = AutoTokenizer.from_pretrained('/data/vdc/tangzichen//Qwen2.5-0.5B-Instruct')
     AutoConfig.register("vlm_model", VLMConfig)
     AutoModelForCausalLM.register(VLMConfig, VLM)
-    model = AutoModelForCausalLM.from_pretrained('/home/user/wyf/train_multimodal_from_scratch/save/pretrain')
+    model = AutoModelForCausalLM.from_pretrained('/data/vdc/tangzichen/train_multimodal_from_scratch/save/pretrain')
     
     for name, param in model.named_parameters():
         if 'linear' in name or 'vision_model':
             param.requires_grad = False
         if 'llm_model' in name:
             param.requires_grad = True
+
     print(f'模型参数量为：{sum(p.numel() for p in model.parameters())}') 
     print(f'模型可训练参数量为：{sum(p.numel() for p in model.parameters() if p.requires_grad)}') 
-    images_path = './sft_images'
-    data_path = './dataset/llava_instruct_230k.json'
+    images_path = '/data/vdc/tangzichen/sft_images'
+    data_path = '/data/vdc/tangzichen/llava_instruct_230k.json'
     output_dir = 'save/sft' 
     args = TrainingArguments(
         output_dir=output_dir,
