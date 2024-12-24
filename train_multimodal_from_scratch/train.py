@@ -18,8 +18,8 @@ from typing import List, Dict, Any
 class VLMConfig(PretrainedConfig):
     model_type = "vlm_model"
     def __init__(self,
-                 llm_model_name,
-                 vision_model_name,
+                 llm_model_name='Qwen/Qwen2.5-0.5B-Instruct',
+                 vision_model_name='google/siglip-base-patch16-224',
                  freeze_vision_model=True,
                  image_pad_num=49,
                  **kwargs):
@@ -40,7 +40,6 @@ class VLM(PreTrainedModel):
 
         # load models (vision encoder, tokenizer, vl connector, llm)
         self.vision_model = AutoModel.from_pretrained(self.config.vision_model_name, cache_dir="/data/vdc/tangzichen/siglip")
-        self.processor = AutoProcessor.from_pretrained(self.config.vision_model_name, cache_dir="/data/vdc/tangzichen/siglip")
         self.llm_model = AutoModelForCausalLM.from_pretrained(self.config.llm_model_name, cache_dir="/data/vdc/tangzichen/qwen2.5")
         self.tokenizer = AutoTokenizer.from_pretrained(self.config.llm_model_name, cache_dir="/data/vdc/tangzichen/qwen2.5")
 
@@ -68,9 +67,9 @@ class VLM(PreTrainedModel):
         # batch_size, token_length, image_token_dim
         b, n, d = image_embeds.shape
         # 由于image emb数量明显多于text emb,会削弱模型对的文本的处理能力, 因此这边选择对iamge emb的长度进行压缩
-        image_embeds = image_embeds.view(b, -1, d * 4)  # [b, 196, d] -> [b, 49, d*4]
+        image_embeds = image_embeds.view(b, -1, d * 4)  # [b, 196, 768] -> [b, 49, 3072]
         # 经过两层linear, 与llm的text space对齐
-        image_features = self.linear2(F.silu(self.linear1(image_embeds)))  # [b, 49, dim_text]
+        image_features = self.linear2(F.silu(self.linear1(image_embeds)))  # [b, 49, 896]
         text_embeds = text_embeds.to(image_features.dtype)
         # 合并text emb与image emb
         inputs_embeds = self.merge_input_ids_with_image_features(image_features, text_embeds, input_ids)
@@ -78,12 +77,17 @@ class VLM(PreTrainedModel):
         # 执行llm的forward前向推理输出预测结果
         # NOTE: 这边用的是qwen的基础模型, 因此model.forward返回的仅仅是最后输出的hidden_states, 而不会帮你计算loss
         outputs = self.llm_model(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
-        logits = outputs[0]  # [b, sequence_length, config.vocab_size]是softmax的结果吗？
+        logits = outputs[0]  # [b, sequence_length, config.vocab_size]不是softmax的结果
         loss = None
         if labels is not None:
+            # NOTE 1: loss内部会将logits转为softmax
+            # NOTE 2: 虽然labels里的值是整数ids, 但loss内部会根据token的ids自动取出该ids位置上的logits值计算负对数似然-1*log(p_pred)
+            # 只计算p_gt=1的位置已经足够了, 若其他p_gt=0的位置再计算loss(如l_i=lambda_i*p_pred_i)则会极大地影响效率, 且收效甚微
             loss = self.loss_fct(
                 logits.view(-1, logits.size(-1)), labels.view(-1).to(logits.device)
             )
+
+        
         return CausalLMOutputWithPast(loss=loss, logits=logits)
         
     # 将text emb中与image占位符对应的部分替换为真正的image emb (49处)
@@ -114,7 +118,7 @@ class MyDataset(Dataset):
         sample = self.datas[index]
         try:
             image_name = sample['image']  # 图像名称
-            conversations = sample['conversations']  # 多轮对话的内容
+            conversations = sample['conversations']  # 多轮对话的内容, 但预训练我们只取首轮对话来训练
             # 把输入改成qwen需要的固定模版, 相当于做一个小小的prompt工程, 让模型更好地适应对话场景
             q_text = self.tokenizer.apply_chat_template(
                 [
@@ -181,6 +185,7 @@ class MyDataCollator:
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
     
+    # 在实际训练过程中, 处理到某个batch时会调用collator
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         # 取到当前batch中所有input的最大长度
         max_len = max(len(example['input_ids']) for example in batch)
@@ -213,7 +218,7 @@ if __name__ == '__main__':
     images_path = '/data/vdc/tangzichen/liuhaotian/LLaVA-CC3M-Pretrain-595K/images'
     data_path = '/data/vdc/tangzichen/LinkSoul/Chinese-LLaVA-Vision-Instructions/LLaVA-CC3M-Pretrain-595K/chat-translated.json'
     tokenizer = AutoTokenizer.from_pretrained(config.llm_model_name, cache_dir="/data/vdc/tangzichen/qwen2.5")
-    processor = AutoProcessor.from_pretrained(config.vision_model_name , cache_dir="/data/vdc/tangzichen/siglip")
+    processor = AutoProcessor.from_pretrained(config.vision_model_name, cache_dir="/data/vdc/tangzichen/siglip")
     train_dataset = MyDataset(images_path, data_path, tokenizer, processor, config)
     train_collator = MyDataCollator(tokenizer)
 
