@@ -45,7 +45,7 @@ class VLM(PreTrainedModel):
         self.linear1 = nn.Linear(self.vision_model.config.vision_config.hidden_size*4, self.llm_model.config.hidden_size)
         self.linear2 = nn.Linear(self.llm_model.config.hidden_size, self.llm_model.config.hidden_size)
         
-        # ce loss func
+        # ce loss func, 设置ignore_index让模型在计算loss时只计算answer部分
         self.loss_fct = nn.CrossEntropyLoss(ignore_index=self.tokenizer.pad_token_id)
 
         # freeze parameters
@@ -85,7 +85,6 @@ class VLM(PreTrainedModel):
                 logits.view(-1, logits.size(-1)), labels.view(-1).to(logits.device)
             )
 
-        
         return CausalLMOutputWithPast(loss=loss, logits=logits)
         
     # 将text emb中与image占位符对应的部分替换为真正的image emb (49处)
