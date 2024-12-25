@@ -1,18 +1,16 @@
 from transformers import PreTrainedModel, PretrainedConfig, AutoTokenizer, AutoModelForCausalLM
 from PIL import Image
-import requests
 from transformers import AutoProcessor, AutoModel
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers.modeling_outputs import CausalLMOutputWithPast
-import zipfile
 from PIL import Image
 import io
 import os
 import json
 from torch.utils.data import Dataset
-from transformers import Trainer, TrainingArguments, DataCollatorWithPadding
+from transformers import Trainer, TrainingArguments
 from typing import List, Dict, Any
 
 class VLMConfig(PretrainedConfig):
@@ -196,13 +194,13 @@ class MyDataCollator:
         for example in batch:
             # 向右padding直到长度=max_len
             input_ids.append(example['input_ids'] + [self.tokenizer.pad_token_id] * (max_len - len(example['input_ids'])))
-            labels.append(example['labels'] + [self.tokenizer.pad_token_id] * (max_len - len(example['labels'])))
             pixel_values.append(example['pixel_values'])
-        
+            labels.append(example['labels'] + [self.tokenizer.pad_token_id] * (max_len - len(example['labels'])))
+
         return {
             'input_ids': torch.tensor(input_ids, dtype=torch.long),
             'pixel_values': torch.cat(pixel_values, dim=0),
-            'labels': torch.tensor(labels, dtype=torch.long),
+            'labels': torch.tensor(labels, dtype=torch.long)
         }
             
         
@@ -240,6 +238,7 @@ if __name__ == '__main__':
         report_to='tensorboard',
         dataloader_pin_memory=True,
         dataloader_num_workers=1
+        # deepspeed="path/to/deepspeed_config.json"
     )
 
     # trainer
