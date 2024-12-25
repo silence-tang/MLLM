@@ -62,7 +62,9 @@ class SFTDataset(Dataset):
             # print(text)
             input_ids = tokenizer(text)['input_ids']
             indexs = find_assistant_tokens(tokenizer, input_ids)
+            # 初始化labels为pad_token_id
             labels = len(input_ids) * [tokenizer.pad_token_id]
+            # 找到input_ids中所有的模型回答的部分, 并将这些token_ids移动到label的对应位置处
             for index in indexs:
                 labels[index[0]:index[1]] = input_ids[index[0]:index[1]]
             input_ids = input_ids[:-1]
@@ -104,7 +106,7 @@ class MyDataCollator:
         labels = []
         # 遍历当前batch中的每个样本
         for example in batch:
-            # 向右padding直到长度=max_len
+            # 向右padding直到长度=max_len, 若不这么处理, 则模型无法处理一个batch中存在不同长度序列的情况
             input_ids.append(example['input_ids'] + [self.tokenizer.pad_token_id] * (max_len - len(example['input_ids'])))
             pixel_values.append(example['pixel_values'])
             labels.append(example['labels'] + [self.tokenizer.pad_token_id] * (max_len - len(example['labels'])))
@@ -120,9 +122,11 @@ if __name__ == '__main__':
 
     # get mllm
     config = VLMConfig(llm_model_name='Qwen/Qwen2.5-0.5B-Instruct', vision_model_name='google/siglip-base-patch16-224', image_pad_num=49)
+    # 需要先将自定义的config和model类注册到AutoConfig和AutoModelForCausalLM中
+    # 这样transformers库才能正确识别并加载自己的预训练模型
     AutoConfig.register("vlm_model", VLMConfig)
     AutoModelForCausalLM.register(VLMConfig, VLM)
-    model = AutoModelForCausalLM.from_pretrained('/data/vdc/tangzichen/train_multimodal_from_scratch/save/pretrained')
+    model = AutoModelForCausalLM.from_pretrained('/data/vdc/tangzichen/MLLM/train_multimodal_from_scratch/save/pretrained')
     
     # 冻结vision encoder和linear层, 只微调llm
     for name, param in model.named_parameters():
@@ -169,7 +173,7 @@ if __name__ == '__main__':
     )
     
     # train!
-    trainer.train(resume_from_checkpoint=True)
+    trainer.train(resume_from_checkpoint=False)
 
     # save model
     trainer.save_model('save/sft')
