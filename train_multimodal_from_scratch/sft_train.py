@@ -1,18 +1,12 @@
-from transformers import PreTrainedModel, PretrainedConfig, AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from PIL import Image
-import requests
-from transformers import AutoProcessor, AutoModel
+from transformers import AutoProcessor
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from transformers.modeling_outputs import CausalLMOutputWithPast
-import zipfile
 from PIL import Image
-import io
 import os
 import json
 from torch.utils.data import Dataset
-from transformers import Trainer, TrainingArguments, DataCollatorWithPadding
+from transformers import Trainer, TrainingArguments
 from typing import List, Dict, Any
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoProcessor, AutoConfig
 from PIL import Image
@@ -96,50 +90,66 @@ class SFTDataset(Dataset):
             'pixel_values': pixel_values
         }   
 
+# collator负责在训练过程中动态地对每个batch的数据进行处理(如padding)
 class MyDataCollator:
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
     
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        max_len = max(len(feature['input_ids']) for feature in features)
+    # 在实际训练过程中, 处理到某个batch时会调用collator
+    def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # 取到当前batch中所有input的最大长度
+        max_len = max(len(example['input_ids']) for example in batch)
         input_ids = []
-        labels = []
         pixel_values = []
-        for feature in features:
-            input_ids.append(feature['input_ids'] + [self.tokenizer.pad_token_id] * (max_len - len(feature['input_ids'])))
-            labels.append(feature['labels'] + [self.tokenizer.pad_token_id] * (max_len - len(feature['labels'])))
-            pixel_values.append(feature['pixel_values'])
+        labels = []
+        # 遍历当前batch中的每个样本
+        for example in batch:
+            # 向右padding直到长度=max_len
+            input_ids.append(example['input_ids'] + [self.tokenizer.pad_token_id] * (max_len - len(example['input_ids'])))
+            pixel_values.append(example['pixel_values'])
+            labels.append(example['labels'] + [self.tokenizer.pad_token_id] * (max_len - len(example['labels'])))
             
-        return {'input_ids': torch.tensor(input_ids, dtype=torch.long),
-                'labels': torch.tensor(labels, dtype=torch.long),
-                'pixel_values': torch.cat(pixel_values, dim=0)}
+        return {
+            'input_ids': torch.tensor(input_ids, dtype=torch.long),
+            'pixel_values': torch.cat(pixel_values, dim=0),
+            'labels': torch.tensor(labels, dtype=torch.long)
+        }
 
 
 if __name__ == '__main__':
-    config = VLMConfig()
-    processor = AutoProcessor.from_pretrained("/data/vdc/tangzichen/siglip-base-patch16-224")
-    tokenizer = AutoTokenizer.from_pretrained('/data/vdc/tangzichen//Qwen2.5-0.5B-Instruct')
+
+    # get mllm
+    config = VLMConfig(llm_model_name='Qwen/Qwen2.5-0.5B-Instruct', vision_model_name='google/siglip-base-patch16-224', image_pad_num=49)
     AutoConfig.register("vlm_model", VLMConfig)
     AutoModelForCausalLM.register(VLMConfig, VLM)
-    model = AutoModelForCausalLM.from_pretrained('/data/vdc/tangzichen/train_multimodal_from_scratch/save/pretrain')
+    model = AutoModelForCausalLM.from_pretrained('/data/vdc/tangzichen/train_multimodal_from_scratch/save/pretrained')
     
+    # 冻结vision encoder和linear层, 只微调llm
     for name, param in model.named_parameters():
         if 'linear' in name or 'vision_model':
             param.requires_grad = False
         if 'llm_model' in name:
             param.requires_grad = True
 
-    print(f'模型参数量为：{sum(p.numel() for p in model.parameters())}') 
-    print(f'模型可训练参数量为：{sum(p.numel() for p in model.parameters() if p.requires_grad)}') 
-    images_path = '/data/vdc/tangzichen/sft_images'
-    data_path = '/data/vdc/tangzichen/llava_instruct_230k.json'
-    output_dir = 'save/sft' 
+    print(f'模型参数量为：{sum(p.numel() for p in model.parameters())}')
+    print(f'模型可训练参数量为：{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
+    
+    # get tokenizer and image processor
+    output_dir = 'save/sft'
+    images_path = '/data/vdc/tangzichen/jingyaogong/minimind-v_dataset/sft_images'
+    data_path = '/data/vdc/tangzichen/jingyaogong/minimind-v_dataset/llava_instruct_230k.json'
+    tokenizer = AutoTokenizer.from_pretrained(config.llm_model_name, cache_dir="/data/vdc/tangzichen/qwen2.5")
+    processor = AutoProcessor.from_pretrained(config.vision_model_name, cache_dir="/data/vdc/tangzichen/siglip")
+    train_dataset = SFTDataset(images_path, data_path, tokenizer, processor, config)
+    train_collator = MyDataCollator(tokenizer)
+
+    # train args
     args = TrainingArguments(
         output_dir=output_dir,
         do_train=True,
         per_device_train_batch_size=2,
         learning_rate=1e-4,
-        num_train_epochs=5,
+        num_train_epochs=2,
         save_steps=500,
         save_total_limit=2,
         fp16=True,
@@ -149,13 +159,18 @@ if __name__ == '__main__':
         dataloader_pin_memory=True,
         dataloader_num_workers=1
     )
+
+    # trainer
     trainer = Trainer(
         model=model,
         args=args,
-        train_dataset=SFTDataset(images_path, data_path, tokenizer, processor, config),
-        data_collator=MyDataCollator(tokenizer)  
+        train_dataset=train_dataset,
+        data_collator=train_collator 
     )
     
+    # train!
     trainer.train(resume_from_checkpoint=True)
+
+    # save model
     trainer.save_model('save/sft')
     trainer.save_state()
