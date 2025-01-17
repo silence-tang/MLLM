@@ -1,3 +1,8 @@
+# import deepspeed
+# deepspeed.ops.op_builder.CPUAdamBuilder().load()
+# import os
+# os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from PIL import Image
 from transformers import AutoProcessor
@@ -126,20 +131,9 @@ if __name__ == '__main__':
     # 这样transformers库才能正确识别并加载自己的预训练模型
     AutoConfig.register("vlm_model", VLMConfig)
     AutoModelForCausalLM.register(VLMConfig, VLM)
-    model = AutoModelForCausalLM.from_pretrained('/data/vdc/tangzichen/MLLM/train_multimodal_from_scratch/save/pretrained')
-    
-    # 冻结vision encoder和linear层, 只微调llm
-    for name, param in model.named_parameters():
-        if 'linear' in name or 'vision_model':
-            param.requires_grad = False
-        if 'llm_model' in name:
-            param.requires_grad = True
-
-    print(f'模型参数量为：{sum(p.numel() for p in model.parameters())}')
-    print(f'模型可训练参数量为：{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
     
     # get tokenizer and image processor
-    output_dir = 'save/sft'
+    output_dir = 'save/sft_0117'
     images_path = '/data/vdc/tangzichen/jingyaogong/minimind-v_dataset/sft_images'
     data_path = '/data/vdc/tangzichen/jingyaogong/minimind-v_dataset/llava_instruct_230k.json'
     tokenizer = AutoTokenizer.from_pretrained(config.llm_model_name, cache_dir="/data/vdc/tangzichen/qwen2.5")
@@ -154,15 +148,28 @@ if __name__ == '__main__':
         per_device_train_batch_size=2,
         learning_rate=1e-4,
         num_train_epochs=2,
-        save_steps=500,
+        save_steps=2000,
         save_total_limit=2,
         fp16=True,
         gradient_accumulation_steps=8,
         logging_steps=100,
         report_to='tensorboard',
         dataloader_pin_memory=True,
-        dataloader_num_workers=1
+        dataloader_num_workers=4,
+        deepspeed="/data/vdc/tangzichen/MLLM/train_multimodal_from_scratch/deepspeed_config_stage1.json"
     )
+
+    model = AutoModelForCausalLM.from_pretrained('/data/vdc/tangzichen/MLLM/train_multimodal_from_scratch/save/pretrained_0116')
+    
+    # 冻结vision encoder和linear层, 只微调llm
+    for name, param in model.named_parameters():
+        if 'linear' in name or 'vision_model':
+            param.requires_grad = False
+        if 'llm_model' in name:
+            param.requires_grad = True
+
+    print(f'模型参数量为：{sum(p.numel() for p in model.parameters())}')
+    print(f'模型可训练参数量为：{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
 
     # trainer
     trainer = Trainer(
@@ -176,5 +183,5 @@ if __name__ == '__main__':
     trainer.train(resume_from_checkpoint=False)
 
     # save model
-    trainer.save_model('save/sft')
+    trainer.save_model(output_dir)
     trainer.save_state()
