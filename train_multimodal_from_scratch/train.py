@@ -1,3 +1,6 @@
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 from transformers import PreTrainedModel, PretrainedConfig, AutoTokenizer, AutoModelForCausalLM
 from PIL import Image
 from transformers import AutoProcessor, AutoModel
@@ -45,7 +48,7 @@ class VLM(PreTrainedModel):
         self.linear1 = nn.Linear(self.vision_model.config.vision_config.hidden_size*4, self.llm_model.config.hidden_size)
         self.linear2 = nn.Linear(self.llm_model.config.hidden_size, self.llm_model.config.hidden_size)
         
-        # ce loss func, 设置ignore_index让模型在计算loss时只计算answer部分
+        # ce loss func, 设置ignore_index让模型在计算loss时只计算answer(且不带padding的)部分
         self.loss_fct = nn.CrossEntropyLoss(ignore_index=self.tokenizer.pad_token_id)
 
         # freeze parameters
@@ -207,9 +210,7 @@ if __name__ == '__main__':
     
     # get mllm
     config = VLMConfig(llm_model_name='Qwen/Qwen2.5-0.5B-Instruct', vision_model_name='google/siglip-base-patch16-224', image_pad_num=49)
-    model = VLM(config).cuda()
-    print(model)
-    print(f'模型参数量为：{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
+    
     
     # get dataset and collator
     images_path = '/data/vdc/tangzichen/liuhaotian/LLaVA-CC3M-Pretrain-595K/images'
@@ -220,7 +221,7 @@ if __name__ == '__main__':
     train_collator = MyDataCollator(tokenizer)
 
     # out dir
-    output_dir = 'save/pretrained'
+    output_dir = 'save/pretrained_0116'
 
     # train args
     args = TrainingArguments(
@@ -228,17 +229,22 @@ if __name__ == '__main__':
         do_train=True,
         per_device_train_batch_size=8,
         learning_rate=1e-4,
-        num_train_epochs=2,
-        save_steps=500,
+        num_train_epochs=4,
+        save_steps=1000,
         save_total_limit=2,
         fp16=True,
         gradient_accumulation_steps=8,
         logging_steps=100,
         report_to='tensorboard',
         dataloader_pin_memory=True,
-        dataloader_num_workers=1
-        # deepspeed="path/to/deepspeed_config.json"
+        dataloader_num_workers=4,
+        deepspeed="/data/vdc/tangzichen/MLLM/train_multimodal_from_scratch/deepspeed_config_stage1.json"
     )
+
+    # 若使用zero-init, 则模型加载必须在args之后
+    model = VLM(config).cuda()
+    # print(model)
+    print(f'模型参数量为：{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
 
     # trainer
     trainer = Trainer(
@@ -254,3 +260,5 @@ if __name__ == '__main__':
     # save model
     trainer.save_model(output_dir=output_dir)
     trainer.save_state()
+
+    # ds: 0.16.2
