@@ -146,7 +146,7 @@ class MyDataset(Dataset):
             labels = labels[1:]
             # 读取图像
             image = Image.open(os.path.join(self.images_path, image_name)).convert("RGB")
-            # 用vision encoder对输入图像进行编码, pixel_values相当于vision tokens
+            # 用self.processor对输入图像进行格式预处理, 获取pixel_values
             pixel_values = self.processor(text=None, images=image)['pixel_values']
         # 若出现某条数据有损, 则用空白图片+描述来补充
         except:
