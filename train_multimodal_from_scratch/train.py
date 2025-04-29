@@ -146,7 +146,7 @@ class MyDataset(Dataset):
             labels = labels[1:]
             # 读取图像
             image = Image.open(os.path.join(self.images_path, image_name)).convert("RGB")
-            # 用self.processor对输入图像进行格式预处理, 获取pixel_values
+            # 用vision encoder对输入图像进行编码, pixel_values相当于vision tokens
             pixel_values = self.processor(text=None, images=image)['pixel_values']
         # 若出现某条数据有损, 则用空白图片+描述来补充
         except:
@@ -211,7 +211,6 @@ if __name__ == '__main__':
     # get mllm
     config = VLMConfig(llm_model_name='Qwen/Qwen2.5-0.5B-Instruct', vision_model_name='google/siglip-base-patch16-224', image_pad_num=49)
     
-    
     # get dataset and collator
     images_path = '/data/vdc/tangzichen/liuhaotian/LLaVA-CC3M-Pretrain-595K/images'
     data_path = '/data/vdc/tangzichen/LinkSoul/Chinese-LLaVA-Vision-Instructions/LLaVA-CC3M-Pretrain-595K/chat-translated.json'
@@ -243,7 +242,7 @@ if __name__ == '__main__':
 
     # 若使用zero-init, 则模型加载必须在args之后
     model = VLM(config).cuda()
-    # print(model)
+    print(model.llm_model)
     print(f'模型参数量为：{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
 
     # trainer
